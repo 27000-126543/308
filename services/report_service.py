@@ -1,10 +1,10 @@
 from datetime import date, datetime, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, and_
 from models import (
     DailyReport, PumpStation, PumpOperationLog,
-    ResourceAllocation, MaterialType, InspectionOrder,
-    InspectionReport, WorkOrderStatus, Warning
+    ResourceAllocation, ResourceAllocationPlan, MaterialType,
+    InspectionOrder, InspectionReport, WorkOrderStatus, Warning
 )
 import json
 
@@ -81,10 +81,13 @@ def generate_daily_report(db: Session, report_date: date = None):
         material_consumption = {}
         for mat_type in MaterialType:
             allocs = db.query(ResourceAllocation).join(
-                ResourceAllocation.plan
+                ResourceAllocationPlan,
+                ResourceAllocation.plan_id == ResourceAllocationPlan.id
             ).filter(
                 ResourceAllocation.material_type == mat_type,
-                ResourceAllocation.locked == True
+                ResourceAllocation.locked == True,
+                ResourceAllocationPlan.district == district,
+                ResourceAllocationPlan.approved_at.between(start, end)
             ).all()
             total_used = sum(a.quantity for a in allocs)
             material_consumption[mat_type.value] = total_used

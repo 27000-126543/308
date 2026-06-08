@@ -240,7 +240,7 @@ def _check_repeated_waterlogging(db: Session, location: str, district: str,
     matching = [e for e in nearby_events
                 if _calculate_distance(e.longitude, e.latitude, longitude, latitude) < 0.5]
 
-    if len(matching) >= 2:
+    if len(matching) >= 3:
         danger = db.query(HiddenDanger).filter(
             HiddenDanger.district == district,
             HiddenDanger.is_high_risk == True

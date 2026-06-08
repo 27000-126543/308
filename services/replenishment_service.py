@@ -76,7 +76,7 @@ def approve_city_level(db: Session, request_id: int, approver: str) -> Replenish
     if not req:
         raise ValueError("补货申请不存在")
 
-    if req.district_approval_status != ApprovalStatus.APPROVED:
+    if req.district_approval_status not in (ApprovalStatus.APPROVED, ApprovalStatus.TIMEOUT_ESCALATED):
         raise ValueError("区级审批尚未通过")
 
     req.city_approval_status = ApprovalStatus.APPROVED
@@ -117,61 +117,56 @@ def check_approval_timeouts(db: Session):
     for req in pending_district:
         elapsed = datetime.utcnow() - req.created_at
         if elapsed > timeout:
+            req.district_approval_status = ApprovalStatus.TIMEOUT_ESCALATED
             req.district_reminder_count += 1
+
             reminder = ApprovalReminder(
                 request_id=req.id,
                 level="district",
                 reminder_count=req.district_reminder_count,
-                escalated=False
+                escalated=True
             )
             db.add(reminder)
 
-            if elapsed > timeout * 2:
-                req.district_approval_status = ApprovalStatus.TIMEOUT_ESCALATED
-                reminder.escalated = True
-                push_message(
-                    db=db,
-                    target_role="headquarters",
-                    category="approval",
-                    title="区级审批超时-已升级",
-                    content=f"补货申请{req.id}区级审批超时，已自动升级至市级",
-                    related_id=req.id,
-                    related_type="replenishment"
-                )
-            else:
-                push_approval(
-                    db=db,
-                    target_role="headquarters",
-                    title="区级审批超时催办",
-                    content=f"补货申请{req.id}区级审批已超时{int(elapsed.total_seconds()/3600)}小时，请尽快处理",
-                    related_id=req.id,
-                    related_type="replenishment"
-                )
+            push_message(
+                db=db,
+                target_role="headquarters",
+                category="approval",
+                title="区级审批超时-已升级至市级",
+                content=f"补货申请{req.id}区级审批已超时{int(elapsed.total_seconds()/3600)}小时，自动转交市级审批",
+                related_id=req.id,
+                related_type="replenishment"
+            )
 
     pending_city = db.query(ReplenishmentRequest).filter(
-        ReplenishmentRequest.district_approval_status == ApprovalStatus.APPROVED,
-        ReplenishmentRequest.city_approval_status == ApprovalStatus.PENDING
+        ReplenishmentRequest.city_approval_status == ApprovalStatus.PENDING,
+        ReplenishmentRequest.district_approval_status.in_([
+            ApprovalStatus.APPROVED, ApprovalStatus.TIMEOUT_ESCALATED
+        ])
     ).all()
 
     for req in pending_city:
-        if not req.district_approved_at:
-            continue
-        elapsed = datetime.utcnow() - req.district_approved_at
+        base_time = req.district_approved_at if req.district_approved_at else req.created_at
+        elapsed = datetime.utcnow() - base_time
         if elapsed > timeout:
             req.city_reminder_count += 1
+
             reminder = ApprovalReminder(
                 request_id=req.id,
                 level="city",
                 reminder_count=req.city_reminder_count,
-                escalated=False
+                escalated=True
             )
             db.add(reminder)
 
-            push_approval(
+            req.city_approval_status = ApprovalStatus.TIMEOUT_ESCALATED
+
+            push_message(
                 db=db,
                 target_role="headquarters",
-                title="市级审批超时催办",
-                content=f"补货申请{req.id}市级审批已超时{int(elapsed.total_seconds()/3600)}小时，请尽快处理",
+                category="approval",
+                title="市级审批超时-已升级至上级主管部门",
+                content=f"补货申请{req.id}市级审批已超时{int(elapsed.total_seconds()/3600)}小时，已升级至上级主管部门处理",
                 related_id=req.id,
                 related_type="replenishment"
             )

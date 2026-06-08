@@ -3,9 +3,38 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from models import (
     Warning, RiskLevel, ResourceAllocationPlan, ResourceAllocation,
-    MaterialInventory, Warehouse, MaterialType, ApprovalStatus
+    MaterialInventory, Warehouse, MaterialType, ApprovalStatus,
+    RainStation, RainRecord, WaterLevelStation, WaterLevelRecord,
+    GroundElevation
 )
 from services.push_service import push_approval, push_dispatch
+
+
+def _get_disaster_point(db: Session, warning: Warning):
+    rain_records = db.query(RainRecord).filter(
+        RainRecord.rainfall_1h >= 10,
+        RainRecord.recorded_at >= warning.created_at
+    ).all()
+    for rr in rain_records:
+        station = db.query(RainStation).filter(RainStation.id == rr.station_id).first()
+        if station and station.district == warning.district:
+            return station.longitude, station.latitude
+
+    wl_records = db.query(WaterLevelRecord).filter(
+        WaterLevelRecord.recorded_at >= warning.created_at
+    ).all()
+    for wr in wl_records:
+        station = db.query(WaterLevelStation).filter(WaterLevelStation.id == wr.station_id).first()
+        if station and station.district == warning.district:
+            return station.longitude, station.latitude
+
+    ground = db.query(GroundElevation).filter(
+        GroundElevation.district == warning.district
+    ).order_by(GroundElevation.elevation.asc()).first()
+    if ground:
+        return ground.longitude, ground.latitude
+
+    return None, None
 
 
 def generate_resource_plan(db: Session, warning: Warning):
@@ -13,6 +42,8 @@ def generate_resource_plan(db: Session, warning: Warning):
         return None
 
     district = warning.district
+    disaster_lon, disaster_lat = _get_disaster_point(db, warning)
+
     warehouses = db.query(Warehouse).filter(Warehouse.district == district).all()
 
     if not warehouses:
@@ -31,7 +62,11 @@ def generate_resource_plan(db: Session, warning: Warning):
                 MaterialInventory.material_type == mat_type
             ).first()
             if inv and (inv.quantity - inv.locked_quantity) > 0:
-                distance = _calc_distance_from_warning(wh, warning)
+                if disaster_lon is not None and disaster_lat is not None:
+                    distance = _haversine(wh.longitude, wh.latitude, disaster_lon, disaster_lat)
+                else:
+                    distance = _haversine(wh.longitude, wh.latitude,
+                                          _get_district_center(db, district))
                 available = inv.quantity - inv.locked_quantity
                 available_list.append({
                     "warehouse_id": wh.id,
@@ -149,11 +184,34 @@ def _calculate_needed_quantity(mat_type: MaterialType, risk_level: RiskLevel) ->
     return base.get(mat_type, 0) * multiplier
 
 
-def _calc_distance_from_warning(warehouse: Warehouse, warning: Warning) -> float:
-    return _haversine(warehouse.longitude, warehouse.latitude, 0, 0)
+def _get_district_center(db: Session, district: str):
+    from sqlalchemy import func
+    stations = db.query(RainStation).filter(RainStation.district == district).all()
+    if stations:
+        avg_lon = sum(s.longitude for s in stations) / len(stations)
+        avg_lat = sum(s.latitude for s in stations) / len(stations)
+        return avg_lon, avg_lat
+
+    wl_stations = db.query(WaterLevelStation).filter(WaterLevelStation.district == district).all()
+    if wl_stations:
+        avg_lon = sum(s.longitude for s in wl_stations) / len(wl_stations)
+        avg_lat = sum(s.latitude for s in wl_stations) / len(wl_stations)
+        return avg_lon, avg_lat
+
+    grounds = db.query(GroundElevation).filter(GroundElevation.district == district).all()
+    if grounds:
+        avg_lon = sum(g.longitude for g in grounds) / len(grounds)
+        avg_lat = sum(g.latitude for g in grounds) / len(grounds)
+        return avg_lon, avg_lat
+
+    return 0, 0
 
 
-def _haversine(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+def _haversine(lon1: float, lat1: float, lon2_or_tuple, lat2: float = None) -> float:
+    if isinstance(lon2_or_tuple, tuple):
+        lon2, lat2 = lon2_or_tuple
+    else:
+        lon2 = lon2_or_tuple
     R = 6371
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
