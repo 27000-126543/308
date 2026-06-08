@@ -5,14 +5,15 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import (
     HiddenDanger, WaterloggingEvent, ReplenishmentRequest,
-    ApprovalReminder, ProcurementRecord
+    ApprovalReminder, ProcurementRecord, UrgeRecord, UrgeTargetType
 )
 from schemas import (
     HiddenDangerResponse, WaterloggingEventCreate, WaterloggingEventResponse,
     ReplenishmentRequestResponse, ReplenishmentDetailResponse,
     ApprovalReminderResponse, DailyReportResponse,
     ProcurementRecordCreate, ProcurementRecordResponse,
-    WarningTimelineResponse, IncidentReviewResponse
+    WarningTimelineResponse, IncidentReviewGroupedResponse,
+    UrgeRecordCreate, UrgeRecordResponse, DashboardResponse
 )
 from services.risk_service import record_waterlogging_event
 from services.replenishment_service import (
@@ -20,6 +21,8 @@ from services.replenishment_service import (
 )
 from services.report_service import generate_daily_report, export_report, export_report_to_excel
 from services.review_service import get_warning_timeline, generate_incident_review
+from services.dashboard_service import get_dashboard
+from services.urge_service import create_urge, get_urges_by_warning, get_urges_by_target
 
 router = APIRouter(prefix="/api/system", tags=["系统管理"])
 
@@ -151,6 +154,14 @@ def get_timeline(warning_id: int, db: Session = Depends(get_db)):
     return result
 
 
+@router.get("/warnings/{warning_id}/dashboard", response_model=DashboardResponse)
+def get_warning_dashboard(warning_id: int, db: Session = Depends(get_db)):
+    result = get_dashboard(db, warning_id)
+    if not result:
+        return None
+    return result
+
+
 @router.get("/incident-review")
 def get_incident_review(warning_id: int = None, district: str = None,
                         start_date: date = None, end_date: date = None,
@@ -159,3 +170,23 @@ def get_incident_review(warning_id: int = None, district: str = None,
     if not result:
         return {"message": "无匹配数据"}
     return result
+
+
+@router.post("/urges", response_model=UrgeRecordResponse)
+def create_urge_record(data: UrgeRecordCreate, db: Session = Depends(get_db)):
+    return create_urge(
+        db=db,
+        target_type=data.target_type,
+        target_id=data.target_id,
+        urger=data.urger,
+        warning_id=data.warning_id,
+        remark=data.remark
+    )
+
+
+@router.get("/urges", response_model=list[UrgeRecordResponse])
+def list_urges(warning_id: int = None, target_type: UrgeTargetType = None,
+               target_id: int = None, db: Session = Depends(get_db)):
+    if warning_id:
+        return get_urges_by_warning(db, warning_id)
+    return get_urges_by_target(db, target_type, target_id)

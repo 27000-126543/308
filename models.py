@@ -265,6 +265,7 @@ class ResourceAllocation(Base):
     arrived_at = Column(DateTime, nullable=True)
     receiver = Column(String(100), nullable=True)
     consumed_quantity = Column(Integer, default=0)
+    consumed_at = Column(DateTime, nullable=True)
     estimated_arrival_hours = Column(Float, default=0)
     plan = relationship("ResourceAllocationPlan", back_populates="allocations")
 
@@ -447,3 +448,24 @@ class ProcurementRecord(Base):
     arrived_at = Column(DateTime, nullable=True)
     stored_at = Column(DateTime, nullable=True)
     remark = Column(Text, default="")
+
+
+class UrgeTargetType(str, enum.Enum):
+    PUMP_CONFIRM = "pump_confirm"
+    WAREHOUSE_SHIP = "warehouse_ship"
+    SITE_SIGN = "site_sign"
+    INSPECTION_REPORT = "inspection_report"
+    PROCUREMENT_STORE = "procurement_store"
+
+
+class UrgeRecord(Base):
+    __tablename__ = "urge_records"
+    id = Column(Integer, primary_key=True, index=True)
+    target_type = Column(Enum(UrgeTargetType), nullable=False)
+    target_id = Column(Integer, nullable=False)
+    warning_id = Column(Integer, ForeignKey("warnings.id"), nullable=True)
+    urger = Column(String(100), nullable=False)
+    urge_count = Column(Integer, default=1)
+    last_urged_at = Column(DateTime, default=datetime.utcnow)
+    remark = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)

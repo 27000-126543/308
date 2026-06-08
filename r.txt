@@ -1,0 +1,24 @@
+=== 催办验证 ===
+首次催办: ID=1 次数=1
+重复催办: ID=1 次数=2
+=== 看板验证 ===
+看板模块: ['rain_water', 'pump_dispatch', 'material_allocation', 'inspection', 'traffic_control', 'replenishment']
+  rain_water           状态=active             超时=True
+  pump_dispatch        状态=issued             超时=False
+  material_allocation  状态=locked             超时=False
+  inspection           状态=completed          超时=False
+  traffic_control      状态=awaiting_approval  超时=False
+  replenishment        状态=not_needed         超时=False
+催办记录: 1条
+=== 时间线验证 ===
+节点: ['warning_triggered', 'pump_dispatch', 'resource_plan_created', 'resource_plan_approved', 'material_shipped', 'material_arrived', 'material_consumed', 'inspection_assigned', 'inspection_reported', 'traffic_control']
+缺失: 无
+待处理: ['traffic_control']
+=== 复盘报告验证 ===
+groups字段: 有
+performance字段: 有
+  区域=城东区 预警数=1
+  绩效: 区域=城东区 工单完成率=1.0 超时=1
+=== 日报验证 ===
+出库={'water_pump': 10, 'sandbag': 0, 'assault_boat': 0} 到达={'water_pump': 10, 'sandbag': 0, 'assault_boat': 0} 消耗={'water_pump': 5, 'sandbag': 0, 'assault_boat': 0}
+=== ALL DONE ===

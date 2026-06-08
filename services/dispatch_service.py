@@ -321,6 +321,7 @@ def confirm_arrival(db: Session, allocation_id: int, receiver: str) -> ResourceA
 
 
 def report_consumption(db: Session, allocation_id: int, consumed_quantity: int) -> ResourceAllocation:
+    from datetime import datetime
     alloc = db.query(ResourceAllocation).filter(ResourceAllocation.id == allocation_id).first()
     if not alloc:
         raise ValueError("调配记录不存在")
@@ -331,6 +332,7 @@ def report_consumption(db: Session, allocation_id: int, consumed_quantity: int) 
         raise ValueError("消耗数量超过剩余量")
 
     alloc.consumed_quantity += consumed_quantity
+    alloc.consumed_at = datetime.utcnow()
 
     if alloc.consumed_quantity >= alloc.quantity:
         alloc.status = AllocationStatus.CONSUMED

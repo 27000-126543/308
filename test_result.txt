@@ -1,0 +1,43 @@
+=== 初始化数据 ===
+基础数据初始化完成
+
+=== 需求1: 处置看板 ===
+预警ID=1 区域=城东区 风险=red
+  rain_water           状态=active             负责人=监测中心       下一步=持续监测降雨水位变化           超时风险!
+  pump_dispatch        状态=issued             负责人=城东泵站       下一步=等待泵站确认               正常
+  material_allocation  状态=locked             负责人=仓储负责人      下一步=等待仓库出库               正常
+  inspection           状态=in_progress        负责人=王巡查        下一步=等待巡查上报               正常
+  traffic_control      状态=awaiting_approval  负责人=-          下一步=等待交警审批               正常
+  replenishment        状态=not_needed         负责人=-          下一步=-                    正常
+催办记录: 2条
+
+=== 需求2: 复盘报告(含考核+多区域分组) ===
+分组数: 1
+  区域=城东区 预警数=1
+    工单={"total": 2, "completed": 1, "pending": 1}
+    物资={"total_allocated": 424, "total_shipped": 10, "total_arrived": 10, "total_consumed": 5, "cross_district_quantity": 212}
+考核分析:
+  区域=城东区 平均响应=Nonemin 超时=2 工单完成率=0.5 物资准时率=1.0
+
+=== 需求3: 时间线待处理节点完整显示 ===
+  待处理: traffic_control
+  待处理: traffic_control
+  待处理: inspection_reported
+  待处理: traffic_control
+缺失节点: 无-全部覆盖
+待处理节点数: 4
+
+=== 需求3: 日报消耗按实际日期统计 ===
+出库={'water_pump': 10, 'sandbag': 0, 'assault_boat': 0} 到达={'water_pump': 10, 'sandbag': 0, 'assault_boat': 0} 消耗={'water_pump': 5, 'sandbag': 0, 'assault_boat': 0}
+
+=== 需求4: 协同催办 ===
+首次催办: ID=1 次数=3
+重复催办: ID=1 次数=4
+泵站催办: ID=2 次数=2
+预警1催办记录: 2条
+看板催办记录: 2条
+  类型=pump_confirm 次数=2
+  类型=warehouse_ship 次数=4
+复盘-区域城东区催办: {"total": 2, "by_type": {"warehouse_ship": {"count": 1, "total_urges": 4}, "pump_confirm": {"count": 1, "total_urges": 2}}}
+
+=== 全部测试完成 ===

@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict
 from models import (
     RiskLevel, ApprovalStatus, WorkOrderStatus, WarningStatus,
     MaterialType, DeviceStatus, TrafficControlType, AllocationStatus,
-    ProcurementStatus,
+    ProcurementStatus, UrgeTargetType,
 )
 
 
@@ -698,3 +698,62 @@ class ReplenishmentDetailResponse(BaseModel):
     city_reminder_count: int
     reminders: list[ApprovalReminderResponse] = []
     procurements: list[ProcurementRecordResponse] = []
+
+
+class UrgeRecordCreate(BaseModel):
+    target_type: UrgeTargetType
+    target_id: int
+    warning_id: Optional[int] = None
+    urger: str
+    remark: str = ""
+
+
+class UrgeRecordResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    target_type: UrgeTargetType
+    target_id: int
+    warning_id: Optional[int] = None
+    urger: str
+    urge_count: int
+    last_urged_at: datetime
+    remark: str
+    created_at: datetime
+
+
+class DashboardModule(BaseModel):
+    module_name: str
+    status: str
+    responsible: Optional[str] = None
+    next_action: Optional[str] = None
+    timeout_risk: bool = False
+    related_ids: list[int] = []
+    details: Optional[dict] = None
+
+
+class DashboardResponse(BaseModel):
+    warning_id: int
+    district: str
+    risk_level: str
+    created_at: datetime
+    modules: list[DashboardModule]
+    urge_records: list[UrgeRecordResponse] = []
+
+
+class DistrictPerformance(BaseModel):
+    district: str
+    avg_response_minutes: Optional[float] = None
+    timeout_count: int = 0
+    work_order_completion_rate: Optional[float] = None
+    material_on_time_rate: Optional[float] = None
+    avg_procurement_store_hours: Optional[float] = None
+    slowest_links: list[dict] = []
+
+
+class IncidentReviewGroupedResponse(BaseModel):
+    warning_id: Optional[int] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    groups: list[dict] = []
+    performance: list[DistrictPerformance] = []

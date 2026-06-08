@@ -1,12 +1,14 @@
 from datetime import datetime, date, timedelta
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from models import (
     Warning, RiskLevel, PumpDispatch, ResourceAllocationPlan,
     ResourceAllocation, AllocationStatus, InspectionOrder,
     InspectionReport, TrafficControlPlan, PumpStation,
     PumpOperationLog, ReplenishmentRequest, ApprovalReminder,
     ProcurementRecord, RainRecord, RainStation, WaterLevelRecord,
-    WaterLevelStation, ApprovalStatus, MaterialType, Warehouse
+    WaterLevelStation, ApprovalStatus, MaterialType, Warehouse,
+    UrgeRecord, ProcurementStatus
 )
 
 
@@ -50,7 +52,7 @@ def get_warning_timeline(db: Session, warning_id: int):
         if plan.approval_status in (ApprovalStatus.APPROVED, ApprovalStatus.REJECTED):
             dur2 = (plan.approved_at - plan.created_at).total_seconds() / 60 if plan.approved_at else None
             nodes.append(_make_node("resource_plan_approved", plan.approval_status.value, plan.approver, plan.approved_at, dur2, None))
-        elif plan.approval_status == ApprovalStatus.PENDING:
+        else:
             nodes.append(_make_node("resource_plan_approved", "pending", None, None, None, None))
 
         allocs = db.query(ResourceAllocation).filter(
@@ -64,7 +66,7 @@ def get_warning_timeline(db: Session, warning_id: int):
             nodes.append(_make_node("material_shipped", "completed", None, first_ship, dur, {
                 "count": len(shipped), "total_qty": sum(a.quantity for a in shipped)
             }))
-        elif plan.approval_status == ApprovalStatus.APPROVED:
+        else:
             nodes.append(_make_node("material_shipped", "pending", None, None, None, None))
 
         arrived = [a for a in allocs if a.arrived_at]
@@ -74,7 +76,7 @@ def get_warning_timeline(db: Session, warning_id: int):
             nodes.append(_make_node("material_arrived", "completed", arrived[0].receiver if arrived else None, first_arr, dur, {
                 "count": len(arrived), "total_qty": sum(a.quantity for a in arrived)
             }))
-        elif shipped:
+        else:
             nodes.append(_make_node("material_arrived", "pending", None, None, None, None))
 
         consumed = [a for a in allocs if a.consumed_quantity > 0]
@@ -83,6 +85,8 @@ def get_warning_timeline(db: Session, warning_id: int):
                 "total_consumed": sum(a.consumed_quantity for a in consumed),
                 "total_allocated": sum(a.quantity for a in allocs)
             }))
+        else:
+            nodes.append(_make_node("material_consumed", "pending", None, None, None, None))
     else:
         for nt in ["resource_plan_created", "resource_plan_approved", "material_shipped", "material_arrived", "material_consumed"]:
             nodes.append(_make_node(nt, "pending", None, None, None, None))
@@ -94,11 +98,11 @@ def get_warning_timeline(db: Session, warning_id: int):
         for o in orders:
             nodes.append(_make_node("inspection_assigned", o.status.value, o.inspector_name, o.created_at,
                                     (o.created_at - t0).total_seconds() / 60, {"location": o.location}))
-            if o.status.value in ("completed", "closed") and o.completed_at:
-                reports = db.query(InspectionReport).filter(InspectionReport.order_id == o.id).all()
+            reports = db.query(InspectionReport).filter(InspectionReport.order_id == o.id).all()
+            if reports:
                 for r in reports:
                     nodes.append(_make_node("inspection_reported", "completed", o.inspector_name, r.reported_at,
-                                            (r.reported_at - o.created_at).total_seconds() / 60,
+                                            (r.reported_at - o.created_at).total_seconds() / 60 if r.reported_at else None,
                                             {"water_depth": r.water_depth, "needs_control": r.needs_traffic_control}))
                     if r.needs_traffic_control:
                         tc = db.query(TrafficControlPlan).filter(
@@ -107,8 +111,15 @@ def get_warning_timeline(db: Session, warning_id: int):
                         if tc:
                             nodes.append(_make_node("traffic_control", tc.approval_status.value, tc.approver, tc.created_at, None,
                                                     {"type": tc.control_type.value, "screen_updated": tc.screen_updated}))
+                        else:
+                            nodes.append(_make_node("traffic_control", "pending", None, None, None, None))
+            else:
+                nodes.append(_make_node("inspection_reported", "pending", None, None, None, None))
+                nodes.append(_make_node("traffic_control", "pending", None, None, None, None))
     else:
         nodes.append(_make_node("inspection_assigned", "pending", None, None, None, None))
+        nodes.append(_make_node("inspection_reported", "pending", None, None, None, None))
+        nodes.append(_make_node("traffic_control", "pending", None, None, None, None))
 
     return {
         "warning_id": warning.id,
@@ -144,23 +155,38 @@ def generate_incident_review(db: Session, warning_id: int = None, district: str 
         query = query.filter(Warning.created_at >= start)
     if end:
         query = query.filter(Warning.created_at <= end)
-    warnings = query.order_by(Warning.created_at.desc()).all()
+    warnings_list = query.order_by(Warning.created_at.desc()).all()
 
-    if not warnings:
+    if not warnings_list:
         return None
 
-    review_district = district or warnings[0].district
+    districts_involved = list(set(w.district for w in warnings_list))
+
+    groups = []
+    for d in sorted(districts_involved):
+        d_warnings = [w for w in warnings_list if w.district == d]
+        d_warning_ids = [w.id for w in d_warnings]
+        group = {
+            "district": d,
+            "warning_count": len(d_warnings),
+            "risk_level_changes": _build_risk_changes(d_warnings),
+            "rainfall_summary": _build_rainfall_summary(db, d, start, end),
+            "pump_discharge_summary": _build_pump_summary(db, d, start, end),
+            "work_order_summary": _build_work_order_summary(db, d, start, end),
+            "material_summary": _build_material_summary(db, d, start, end),
+            "replenishment_summary": _build_replenishment_summary(db, d, start, end),
+            "urge_summary": _build_urge_summary(db, d_warning_ids)
+        }
+        groups.append(group)
+
+    performance = _build_performance(db, warnings_list, districts_involved, start, end)
+
     result = {
         "warning_id": warning_id,
-        "district": review_district,
         "start_date": start_date,
         "end_date": end_date,
-        "rainfall_summary": _build_rainfall_summary(db, review_district, start, end),
-        "risk_level_changes": _build_risk_changes(warnings),
-        "pump_discharge_summary": _build_pump_summary(db, review_district, start, end),
-        "work_order_summary": _build_work_order_summary(db, review_district, start, end),
-        "material_summary": _build_material_summary(db, review_district, start, end),
-        "replenishment_summary": _build_replenishment_summary(db, review_district, start, end)
+        "groups": groups,
+        "performance": performance
     }
     return result
 
@@ -274,3 +300,143 @@ def _build_replenishment_summary(db, district, start, end):
         "reminders_count": reminders_count,
         "procurements_count": procurements_count
     }
+
+
+def _build_urge_summary(db, warning_ids):
+    if not warning_ids:
+        return {"total": 0, "by_type": {}}
+    urges = db.query(UrgeRecord).filter(UrgeRecord.warning_id.in_(warning_ids)).all()
+    by_type = {}
+    for u in urges:
+        key = u.target_type.value
+        if key not in by_type:
+            by_type[key] = {"count": 0, "total_urges": 0}
+        by_type[key]["count"] += 1
+        by_type[key]["total_urges"] += u.urge_count
+    return {"total": len(urges), "by_type": by_type}
+
+
+def _build_performance(db, warnings_list, districts, start, end):
+    performance_list = []
+
+    for d in sorted(districts):
+        d_warnings = [w for w in warnings_list if w.district == d]
+        d_warning_ids = [w.id for w in d_warnings]
+
+        response_times = []
+        for w in d_warnings:
+            dispatch = db.query(PumpDispatch).filter(PumpDispatch.warning_id == w.id).first()
+            if dispatch and dispatch.issued_at and dispatch.acknowledged_at:
+                response_times.append((dispatch.acknowledged_at - dispatch.issued_at).total_seconds() / 60)
+
+        avg_response = sum(response_times) / len(response_times) if response_times else None
+
+        timeout_count = 0
+        reminders = db.query(ApprovalReminder).join(ReplenishmentRequest).join(Warehouse).filter(
+            Warehouse.district == d
+        ).all()
+        timeout_count += sum(1 for r in reminders if r.escalated)
+
+        timeout_count += db.query(UrgeRecord).filter(
+            UrgeRecord.warning_id.in_(d_warning_ids)
+        ).count()
+
+        wo_query = db.query(InspectionOrder).filter(InspectionOrder.district == d)
+        if start:
+            wo_query = wo_query.filter(InspectionOrder.created_at >= start)
+        if end:
+            wo_query = wo_query.filter(InspectionOrder.created_at <= end)
+        orders = wo_query.all()
+        completed_orders = [o for o in orders if o.status.value in ("completed", "closed")]
+        completion_rate = len(completed_orders) / len(orders) if orders else None
+
+        mat_query = db.query(ResourceAllocation).join(ResourceAllocationPlan).filter(
+            ResourceAllocationPlan.district == d
+        )
+        if start:
+            mat_query = mat_query.filter(ResourceAllocationPlan.approved_at >= start)
+        if end:
+            mat_query = mat_query.filter(ResourceAllocationPlan.approved_at <= end)
+        allocs = mat_query.all()
+
+        arrived_on_time = 0
+        arrived_total = 0
+        for a in allocs:
+            if a.arrived_at and a.shipped_at:
+                arrived_total += 1
+                est_hours = a.estimated_arrival_hours or 4
+                if (a.arrived_at - a.shipped_at).total_seconds() <= est_hours * 3600:
+                    arrived_on_time += 1
+        on_time_rate = arrived_on_time / arrived_total if arrived_total > 0 else None
+
+        wh_ids = [w.id for w in db.query(Warehouse).filter(Warehouse.district == d).all()]
+        store_hours = []
+        if wh_ids:
+            reqs = db.query(ReplenishmentRequest).filter(ReplenishmentRequest.warehouse_id.in_(wh_ids))
+            if start:
+                reqs = reqs.filter(ReplenishmentRequest.created_at >= start)
+            if end:
+                reqs = reqs.filter(ReplenishmentRequest.created_at <= end)
+            for req in reqs.all():
+                procs = db.query(ProcurementRecord).filter(
+                    ProcurementRecord.request_id == req.id,
+                    ProcurementRecord.status == ProcurementStatus.STORED
+                ).all()
+                for p in procs:
+                    if p.stored_at and p.purchasing_at:
+                        store_hours.append((p.stored_at - p.purchasing_at).total_seconds() / 3600)
+        avg_store_hours = sum(store_hours) / len(store_hours) if store_hours else None
+
+        slowest_links = _find_slowest_links(db, d, d_warning_ids, allocs)
+
+        performance_list.append({
+            "district": d,
+            "avg_response_minutes": round(avg_response, 1) if avg_response else None,
+            "timeout_count": timeout_count,
+            "work_order_completion_rate": round(completion_rate, 3) if completion_rate else None,
+            "material_on_time_rate": round(on_time_rate, 3) if on_time_rate else None,
+            "avg_procurement_store_hours": round(avg_store_hours, 1) if avg_store_hours else None,
+            "slowest_links": slowest_links
+        })
+
+    return performance_list
+
+
+def _find_slowest_links(db, district, warning_ids, allocs):
+    links = []
+
+    for wid in warning_ids:
+        dispatch = db.query(PumpDispatch).filter(PumpDispatch.warning_id == wid).first()
+        if dispatch and dispatch.issued_at and dispatch.acknowledged_at:
+            mins = (dispatch.acknowledged_at - dispatch.issued_at).total_seconds() / 60
+            if mins > 30:
+                links.append({"warning_id": wid, "link": "pump_confirm", "minutes": round(mins, 1)})
+
+    for a in allocs:
+        if a.shipped_at and a.arrived_at:
+            est = a.estimated_arrival_hours or 4
+            actual = (a.arrived_at - a.shipped_at).total_seconds() / 3600
+            if actual > est:
+                links.append({"allocation_id": a.id, "link": "material_arrival", "actual_hours": round(actual, 1), "estimated_hours": est})
+
+    wh_ids = [w.id for w in db.query(Warehouse).filter(Warehouse.district == district).all()]
+    if wh_ids:
+        reqs = db.query(ReplenishmentRequest).filter(ReplenishmentRequest.warehouse_id.in_(wh_ids)).all()
+        for req in reqs:
+            if req.district_approved_at and req.created_at:
+                mins = (req.district_approved_at - req.created_at).total_seconds() / 60
+                if mins > 180:
+                    links.append({"request_id": req.id, "link": "district_approval", "minutes": round(mins, 1)})
+            if req.city_approved_at and req.district_approved_at:
+                mins = (req.city_approved_at - req.district_approved_at).total_seconds() / 60
+                if mins > 180:
+                    links.append({"request_id": req.id, "link": "city_approval", "minutes": round(mins, 1)})
+            procs = db.query(ProcurementRecord).filter(ProcurementRecord.request_id == req.id).all()
+            for p in procs:
+                if p.stored_at and p.purchasing_at:
+                    hours = (p.stored_at - p.purchasing_at).total_seconds() / 3600
+                    if hours > 48:
+                        links.append({"procurement_id": p.id, "link": "procurement_store", "hours": round(hours, 1)})
+
+    links.sort(key=lambda x: x.get("minutes") or x.get("hours") or x.get("actual_hours") or 0, reverse=True)
+    return links[:5]

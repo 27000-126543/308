@@ -98,7 +98,8 @@ def generate_daily_report(db: Session, report_date: date = None):
                     total_shipped += alloc.quantity
                 if alloc.arrived_at and start <= alloc.arrived_at <= end:
                     total_arrived += alloc.quantity
-                total_consumed += alloc.consumed_quantity
+                if alloc.consumed_at and start <= alloc.consumed_at <= end:
+                    total_consumed += alloc.consumed_quantity
 
             material_consumption[mat_type.value] = total_consumed
             material_shipped[mat_type.value] = total_shipped
