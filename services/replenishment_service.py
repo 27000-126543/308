@@ -2,7 +2,8 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from models import (
     MaterialInventory, Warehouse, ReplenishmentRequest,
-    MaterialType, ApprovalStatus, ApprovalReminder
+    MaterialType, ApprovalStatus, ApprovalReminder,
+    ProcurementRecord, ProcurementStatus
 )
 from services.push_service import push_approval, push_message
 
@@ -84,20 +85,20 @@ def approve_city_level(db: Session, request_id: int, approver: str) -> Replenish
     req.city_approved_at = datetime.utcnow()
     req.procurement_synced = True
 
-    inv = db.query(MaterialInventory).filter(
-        MaterialInventory.warehouse_id == req.warehouse_id,
-        MaterialInventory.material_type == req.material_type
-    ).first()
-    if inv:
-        inv.quantity += req.request_quantity
-        inv.updated_at = datetime.utcnow()
+    procurement = ProcurementRecord(
+        request_id=req.id,
+        status=ProcurementStatus.PURCHASING,
+        quantity=req.request_quantity,
+        purchasing_at=datetime.utcnow()
+    )
+    db.add(procurement)
 
     push_message(
         db=db,
         target_role="headquarters",
         category="approval",
-        title="物资补货已完成",
-        content=f"{req.material_type.value}补货{req.request_quantity}件已审批通过并同步采购",
+        title="物资补货已审批-采购中",
+        content=f"{req.material_type.value}补货{req.request_quantity}件已审批通过，已创建采购记录",
         related_id=req.id,
         related_type="replenishment"
     )
@@ -184,3 +185,61 @@ def _check_city_timeouts(db: Session, timeout: timedelta):
                 related_id=req.id,
                 related_type="replenishment"
             )
+
+
+def mark_procurement_arrived(db: Session, procurement_id: int) -> ProcurementRecord:
+    proc = db.query(ProcurementRecord).filter(ProcurementRecord.id == procurement_id).first()
+    if not proc:
+        raise ValueError("采购记录不存在")
+    if proc.status != ProcurementStatus.PURCHASING:
+        raise ValueError(f"当前状态{proc.status.value}不可标记到货，需为purchasing")
+
+    proc.status = ProcurementStatus.ARRIVED
+    proc.arrived_at = datetime.utcnow()
+
+    push_message(
+        db=db,
+        target_role="headquarters",
+        category="approval",
+        title="采购物资已到货",
+        content=f"补货申请{proc.request_id}的物资{proc.quantity}件已到货，待入库",
+        related_id=proc.id,
+        related_type="procurement"
+    )
+
+    db.commit()
+    return proc
+
+
+def mark_procurement_stored(db: Session, procurement_id: int) -> ProcurementRecord:
+    proc = db.query(ProcurementRecord).filter(ProcurementRecord.id == procurement_id).first()
+    if not proc:
+        raise ValueError("采购记录不存在")
+    if proc.status != ProcurementStatus.ARRIVED:
+        raise ValueError(f"当前状态{proc.status.value}不可入库，需为arrived")
+
+    proc.status = ProcurementStatus.STORED
+    proc.stored_at = datetime.utcnow()
+
+    req = db.query(ReplenishmentRequest).filter(ReplenishmentRequest.id == proc.request_id).first()
+    if req:
+        inv = db.query(MaterialInventory).filter(
+            MaterialInventory.warehouse_id == req.warehouse_id,
+            MaterialInventory.material_type == req.material_type
+        ).first()
+        if inv:
+            inv.quantity += proc.quantity
+            inv.updated_at = datetime.utcnow()
+
+    push_message(
+        db=db,
+        target_role="headquarters",
+        category="approval",
+        title="采购物资已入库",
+        content=f"补货申请{proc.request_id}的物资{proc.quantity}件已入库，库存已更新",
+        related_id=proc.id,
+        related_type="procurement"
+    )
+
+    db.commit()
+    return proc

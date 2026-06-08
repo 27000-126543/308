@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict
 from models import (
     RiskLevel, ApprovalStatus, WorkOrderStatus, WarningStatus,
     MaterialType, DeviceStatus, TrafficControlType, AllocationStatus,
+    ProcurementStatus,
 )
 
 
@@ -624,3 +625,76 @@ class RiskCalculationResponse(BaseModel):
     rainfall_intensity: float
     pipe_usage_ratio: float
     elevation_risk: float
+
+
+class TimelineNode(BaseModel):
+    node_type: str
+    status: str
+    handler: Optional[str] = None
+    occurred_at: Optional[datetime] = None
+    duration_minutes: Optional[float] = None
+    details: Any = None
+
+
+class WarningTimelineResponse(BaseModel):
+    warning_id: int
+    district: str
+    risk_level: RiskLevel
+    created_at: datetime
+    nodes: list[TimelineNode]
+
+
+class IncidentReviewResponse(BaseModel):
+    warning_id: Optional[int] = None
+    district: str
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    rainfall_summary: Any = None
+    risk_level_changes: list[Any] = []
+    pump_discharge_summary: Any = None
+    work_order_summary: Any = None
+    material_summary: Any = None
+    replenishment_summary: Any = None
+
+
+class ProcurementRecordCreate(BaseModel):
+    request_id: int
+    quantity: int
+    purchaser: Optional[str] = None
+
+
+class ProcurementRecordResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    request_id: int
+    status: ProcurementStatus
+    quantity: int
+    purchaser: Optional[str] = None
+    purchasing_at: datetime
+    arrived_at: Optional[datetime] = None
+    stored_at: Optional[datetime] = None
+    remark: str
+
+
+class ReplenishmentDetailResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    warehouse_id: int
+    material_type: MaterialType
+    current_quantity: int
+    safety_stock: int
+    request_quantity: int
+    district_approval_status: ApprovalStatus
+    district_approver: Optional[str] = None
+    district_approved_at: Optional[datetime] = None
+    city_approval_status: ApprovalStatus
+    city_approver: Optional[str] = None
+    city_approved_at: Optional[datetime] = None
+    procurement_synced: bool
+    created_at: datetime
+    district_reminder_count: int
+    city_reminder_count: int
+    reminders: list[ApprovalReminderResponse] = []
+    procurements: list[ProcurementRecordResponse] = []

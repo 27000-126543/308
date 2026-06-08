@@ -65,6 +65,12 @@ class AllocationStatus(str, enum.Enum):
     CONSUMED = "consumed"
 
 
+class ProcurementStatus(str, enum.Enum):
+    PURCHASING = "purchasing"
+    ARRIVED = "arrived"
+    STORED = "stored"
+
+
 class RainStation(Base):
     __tablename__ = "rain_stations"
     id = Column(Integer, primary_key=True, index=True)
@@ -428,3 +434,16 @@ class PushMessage(Base):
     related_type = Column(String(50), nullable=True)
     read = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ProcurementRecord(Base):
+    __tablename__ = "procurement_records"
+    id = Column(Integer, primary_key=True, index=True)
+    request_id = Column(Integer, ForeignKey("replenishment_requests.id"), nullable=False)
+    status = Column(Enum(ProcurementStatus), default=ProcurementStatus.PURCHASING)
+    quantity = Column(Integer, nullable=False)
+    purchaser = Column(String(100), nullable=True)
+    purchasing_at = Column(DateTime, default=datetime.utcnow)
+    arrived_at = Column(DateTime, nullable=True)
+    stored_at = Column(DateTime, nullable=True)
+    remark = Column(Text, default="")

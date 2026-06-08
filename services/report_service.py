@@ -81,22 +81,24 @@ def generate_daily_report(db: Session, report_date: date = None):
         material_arrived = {}
 
         for mat_type in MaterialType:
-            allocs = db.query(ResourceAllocation).join(
+            base_query = db.query(ResourceAllocation).join(
                 ResourceAllocationPlan,
                 ResourceAllocation.plan_id == ResourceAllocationPlan.id
             ).filter(
                 ResourceAllocation.material_type == mat_type,
-                ResourceAllocationPlan.district == district,
-                ResourceAllocationPlan.approved_at.between(start, end)
-            ).all()
+                ResourceAllocationPlan.district == district
+            )
 
-            total_consumed = sum(a.consumed_quantity for a in allocs)
-            total_shipped = sum(a.quantity for a in allocs if a.status in (
-                AllocationStatus.SHIPPED, AllocationStatus.ARRIVED, AllocationStatus.CONSUMED
-            ))
-            total_arrived = sum(a.quantity for a in allocs if a.status in (
-                AllocationStatus.ARRIVED, AllocationStatus.CONSUMED
-            ))
+            total_consumed = 0
+            total_shipped = 0
+            total_arrived = 0
+
+            for alloc in base_query.all():
+                if alloc.shipped_at and start <= alloc.shipped_at <= end:
+                    total_shipped += alloc.quantity
+                if alloc.arrived_at and start <= alloc.arrived_at <= end:
+                    total_arrived += alloc.quantity
+                total_consumed += alloc.consumed_quantity
 
             material_consumption[mat_type.value] = total_consumed
             material_shipped[mat_type.value] = total_shipped

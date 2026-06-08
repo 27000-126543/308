@@ -3,14 +3,23 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from database import get_db
-from models import HiddenDanger, WaterloggingEvent, ReplenishmentRequest, ApprovalReminder
+from models import (
+    HiddenDanger, WaterloggingEvent, ReplenishmentRequest,
+    ApprovalReminder, ProcurementRecord
+)
 from schemas import (
     HiddenDangerResponse, WaterloggingEventCreate, WaterloggingEventResponse,
-    ReplenishmentRequestResponse, ApprovalReminderResponse, DailyReportResponse
+    ReplenishmentRequestResponse, ReplenishmentDetailResponse,
+    ApprovalReminderResponse, DailyReportResponse,
+    ProcurementRecordCreate, ProcurementRecordResponse,
+    WarningTimelineResponse, IncidentReviewResponse
 )
 from services.risk_service import record_waterlogging_event
-from services.replenishment_service import check_approval_timeouts
+from services.replenishment_service import (
+    check_approval_timeouts, mark_procurement_arrived, mark_procurement_stored
+)
 from services.report_service import generate_daily_report, export_report, export_report_to_excel
+from services.review_service import get_warning_timeline, generate_incident_review
 
 router = APIRouter(prefix="/api/system", tags=["系统管理"])
 
@@ -29,13 +38,9 @@ def list_hidden_dangers(district: str = None, is_high_risk: bool = None,
 @router.post("/waterlogging-events", response_model=WaterloggingEventResponse)
 def create_waterlogging_event(data: WaterloggingEventCreate, db: Session = Depends(get_db)):
     return record_waterlogging_event(
-        db=db,
-        location=data.location,
-        district=data.district,
-        longitude=data.longitude,
-        latitude=data.latitude,
-        water_depth=data.water_depth,
-        warning_id=data.warning_id
+        db=db, location=data.location, district=data.district,
+        longitude=data.longitude, latitude=data.latitude,
+        water_depth=data.water_depth, warning_id=data.warning_id
     )
 
 
@@ -55,6 +60,24 @@ def list_replenishment_requests(db: Session = Depends(get_db)):
     ).all()
 
 
+@router.get("/replenishment-requests/{request_id}", response_model=ReplenishmentDetailResponse)
+def get_replenishment_detail(request_id: int, db: Session = Depends(get_db)):
+    req = db.query(ReplenishmentRequest).filter(ReplenishmentRequest.id == request_id).first()
+    if not req:
+        return None
+    reminders = db.query(ApprovalReminder).filter(
+        ApprovalReminder.request_id == request_id
+    ).order_by(ApprovalReminder.created_at).all()
+    procurements = db.query(ProcurementRecord).filter(
+        ProcurementRecord.request_id == request_id
+    ).order_by(ProcurementRecord.purchasing_at).all()
+
+    result = ReplenishmentDetailResponse.model_validate(req)
+    result.reminders = [ApprovalReminderResponse.model_validate(r) for r in reminders]
+    result.procurements = [ProcurementRecordResponse.model_validate(p) for p in procurements]
+    return result
+
+
 @router.post("/check-approval-timeouts")
 def check_timeouts(db: Session = Depends(get_db)):
     check_approval_timeouts(db)
@@ -72,6 +95,24 @@ def list_approval_reminders(request_id: int = None, level: str = None,
     if escalated is not None:
         query = query.filter(ApprovalReminder.escalated == escalated)
     return query.order_by(ApprovalReminder.created_at.desc()).all()
+
+
+@router.get("/procurements", response_model=list[ProcurementRecordResponse])
+def list_procurements(request_id: int = None, db: Session = Depends(get_db)):
+    query = db.query(ProcurementRecord)
+    if request_id:
+        query = query.filter(ProcurementRecord.request_id == request_id)
+    return query.order_by(ProcurementRecord.purchasing_at.desc()).all()
+
+
+@router.put("/procurements/{procurement_id}/arrive", response_model=ProcurementRecordResponse)
+def mark_arrived(procurement_id: int, db: Session = Depends(get_db)):
+    return mark_procurement_arrived(db, procurement_id)
+
+
+@router.put("/procurements/{procurement_id}/store", response_model=ProcurementRecordResponse)
+def mark_stored(procurement_id: int, db: Session = Depends(get_db)):
+    return mark_procurement_stored(db, procurement_id)
 
 
 @router.post("/generate-daily-report")
@@ -100,3 +141,21 @@ def export_report_excel(start_date: date = None, end_date: date = None,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
+
+
+@router.get("/warnings/{warning_id}/timeline", response_model=WarningTimelineResponse)
+def get_timeline(warning_id: int, db: Session = Depends(get_db)):
+    result = get_warning_timeline(db, warning_id)
+    if not result:
+        return None
+    return result
+
+
+@router.get("/incident-review")
+def get_incident_review(warning_id: int = None, district: str = None,
+                        start_date: date = None, end_date: date = None,
+                        db: Session = Depends(get_db)):
+    result = generate_incident_review(db, warning_id, district, start_date, end_date)
+    if not result:
+        return {"message": "无匹配数据"}
+    return result

@@ -10,7 +10,8 @@ from models import (
     ResourceAllocationPlan, ResourceAllocation, InspectionOrder,
     InspectionReport, TrafficControlPlan, GuideScreen, HiddenDanger,
     WaterloggingEvent, MaintenanceOrder, MaintenanceTeam,
-    ReplenishmentRequest, ApprovalReminder, DailyReport, PushMessage
+    ReplenishmentRequest, ApprovalReminder, DailyReport, PushMessage,
+    ProcurementRecord
 )
 from routers import (
     stations_router, warnings_router, pump_router, materials_router,

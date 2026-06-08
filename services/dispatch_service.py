@@ -94,6 +94,8 @@ def generate_resource_plan(db: Session, warning: Warning):
     allocations = []
     cross_district_summary = {}
 
+    cross_alloc_warehouse_ids = set()
+
     for mat_type in MaterialType:
         needed = _calculate_needed_quantity(mat_type, warning.risk_level)
         local_allocated = 0
@@ -118,6 +120,7 @@ def generate_resource_plan(db: Session, warning: Warning):
             local_allocated += alloc_qty
             remaining -= alloc_qty
 
+        cross_used_districts = []
         if remaining > 0 and cross_district_warehouses:
             cross_available = _collect_available(db, cross_district_warehouses, mat_type, disaster_lon, disaster_lat, district)
             cross_available.sort(key=lambda x: x["distance"])
@@ -135,6 +138,9 @@ def generate_resource_plan(db: Session, warning: Warning):
                     "estimated_arrival_hours": _estimate_arrival_hours(item["distance"])
                 })
                 cross_allocated += alloc_qty
+                cross_alloc_warehouse_ids.add(item["warehouse_id"])
+                if item["district"] not in cross_used_districts:
+                    cross_used_districts.append(item["district"])
                 remaining -= alloc_qty
 
         plan_data[mat_type.value] = {
@@ -148,10 +154,7 @@ def generate_resource_plan(db: Session, warning: Warning):
         if cross_allocated > 0:
             cross_district_summary[mat_type.value] = {
                 "cross_district_quantity": cross_allocated,
-                "source_districts": list(set(
-                    item["district"] for item in cross_available
-                    if item["available"] > 0
-                )) if cross_allocated > 0 else []
+                "source_districts": cross_used_districts
             }
 
     plan = ResourceAllocationPlan(
@@ -217,6 +220,9 @@ def approve_resource_plan(db: Session, plan_id: int, approver: str) -> ResourceA
     plan = db.query(ResourceAllocationPlan).filter(ResourceAllocationPlan.id == plan_id).first()
     if not plan:
         raise ValueError("调配方案不存在")
+
+    if plan.approval_status == ApprovalStatus.APPROVED:
+        return plan
 
     plan.approval_status = ApprovalStatus.APPROVED
     plan.approver = approver
