@@ -3,7 +3,8 @@ from services.risk_service import (
     record_waterlogging_event
 )
 from services.dispatch_service import (
-    generate_resource_plan, approve_resource_plan, reject_resource_plan
+    generate_resource_plan, approve_resource_plan, reject_resource_plan,
+    confirm_shipment, confirm_arrival, report_consumption
 )
 from services.inspection_service import (
     create_inspection_order, submit_inspection_report, approve_traffic_control

@@ -4,7 +4,7 @@ from typing import Optional, Any
 from pydantic import BaseModel, ConfigDict
 from models import (
     RiskLevel, ApprovalStatus, WorkOrderStatus, WarningStatus,
-    MaterialType, DeviceStatus, TrafficControlType,
+    MaterialType, DeviceStatus, TrafficControlType, AllocationStatus,
 )
 
 
@@ -295,6 +295,7 @@ class ResourceAllocationPlanResponse(BaseModel):
     warning_id: int
     district: str
     plan_data: Any
+    cross_district_summary: Any = dict
     approval_status: ApprovalStatus
     approver: Optional[str] = None
     approved_at: Optional[datetime] = None
@@ -307,7 +308,8 @@ class ResourceAllocationCreate(BaseModel):
     material_type: MaterialType
     quantity: int
     distance_km: float = 0
-    locked: bool = False
+    is_cross_district: bool = False
+    estimated_arrival_hours: float = 0
 
 
 class ResourceAllocationResponse(BaseModel):
@@ -319,7 +321,27 @@ class ResourceAllocationResponse(BaseModel):
     material_type: MaterialType
     quantity: int
     distance_km: float
-    locked: bool
+    is_cross_district: bool
+    status: AllocationStatus
+    shipped_at: Optional[datetime] = None
+    arrived_at: Optional[datetime] = None
+    receiver: Optional[str] = None
+    consumed_quantity: int
+    estimated_arrival_hours: float
+
+
+class ShipmentConfirmRequest(BaseModel):
+    allocation_id: int
+
+
+class ArrivalConfirmRequest(BaseModel):
+    allocation_id: int
+    receiver: str
+
+
+class ConsumptionReportRequest(BaseModel):
+    allocation_id: int
+    consumed_quantity: int
 
 
 class InspectionOrderCreate(BaseModel):
@@ -542,6 +564,7 @@ class ApprovalReminderResponse(BaseModel):
     level: str
     reminder_count: int
     escalated: bool
+    content: str
     created_at: datetime
 
 
@@ -555,6 +578,8 @@ class DailyReportResponse(BaseModel):
     total_energy: float
     avg_response_time: float
     material_consumption: Any
+    material_shipped: Any
+    material_arrived: Any
     pump_stats: Any
     generated_at: datetime
 

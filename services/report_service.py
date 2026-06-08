@@ -1,12 +1,11 @@
 from datetime import date, datetime, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_
+from sqlalchemy import and_
 from models import (
     DailyReport, PumpStation, PumpOperationLog,
     ResourceAllocation, ResourceAllocationPlan, MaterialType,
-    InspectionOrder, InspectionReport, WorkOrderStatus, Warning
+    AllocationStatus, InspectionOrder, WorkOrderStatus, Warning
 )
-import json
 
 
 def generate_daily_report(db: Session, report_date: date = None):
@@ -18,6 +17,15 @@ def generate_daily_report(db: Session, report_date: date = None):
 
     stations = db.query(PumpStation).all()
     districts = set(s.district for s in stations)
+
+    if not districts:
+        districts = set()
+
+    alloc_plans = db.query(ResourceAllocationPlan).filter(
+        ResourceAllocationPlan.approved_at.between(start, end)
+    ).all()
+    for plan in alloc_plans:
+        districts.add(plan.district)
 
     for district in districts:
         existing = db.query(DailyReport).filter(
@@ -51,46 +59,48 @@ def generate_daily_report(db: Session, report_date: date = None):
                 "log_count": len(logs)
             })
 
+        avg_response_time = 0
         warnings_in_district = db.query(Warning).filter(
             Warning.district == district,
             Warning.created_at.between(start, end)
         ).all()
 
-        first_warning_time = None
-        last_response_time = None
         if warnings_in_district:
-            first_warning_time = min(w.created_at for w in warnings_in_district)
-            dispatches_for_warnings = []
+            dispatch_times = []
             for w in warnings_in_district:
                 for d in w.dispatches:
                     if d.acknowledged_at:
-                        dispatches_for_warnings.append((d.issued_at, d.acknowledged_at))
-            if dispatches_for_warnings:
+                        dispatch_times.append((d.issued_at, d.acknowledged_at))
+            if dispatch_times:
                 response_times = [(ack - issued).total_seconds() / 60
-                                  for issued, ack in dispatches_for_warnings]
-                last_response_time = sum(response_times) / len(response_times) if response_times else 0
-
-        orders = db.query(InspectionOrder).filter(
-            InspectionOrder.district == district,
-            InspectionOrder.created_at.between(start, end)
-        ).all()
-
-        completed_orders = [o for o in orders if o.status == WorkOrderStatus.COMPLETED]
-        avg_response_time = last_response_time if last_response_time else 0
+                                  for issued, ack in dispatch_times]
+                avg_response_time = sum(response_times) / len(response_times)
 
         material_consumption = {}
+        material_shipped = {}
+        material_arrived = {}
+
         for mat_type in MaterialType:
             allocs = db.query(ResourceAllocation).join(
                 ResourceAllocationPlan,
                 ResourceAllocation.plan_id == ResourceAllocationPlan.id
             ).filter(
                 ResourceAllocation.material_type == mat_type,
-                ResourceAllocation.locked == True,
                 ResourceAllocationPlan.district == district,
                 ResourceAllocationPlan.approved_at.between(start, end)
             ).all()
-            total_used = sum(a.quantity for a in allocs)
-            material_consumption[mat_type.value] = total_used
+
+            total_consumed = sum(a.consumed_quantity for a in allocs)
+            total_shipped = sum(a.quantity for a in allocs if a.status in (
+                AllocationStatus.SHIPPED, AllocationStatus.ARRIVED, AllocationStatus.CONSUMED
+            ))
+            total_arrived = sum(a.quantity for a in allocs if a.status in (
+                AllocationStatus.ARRIVED, AllocationStatus.CONSUMED
+            ))
+
+            material_consumption[mat_type.value] = total_consumed
+            material_shipped[mat_type.value] = total_shipped
+            material_arrived[mat_type.value] = total_arrived
 
         report = DailyReport(
             report_date=report_date,
@@ -99,6 +109,8 @@ def generate_daily_report(db: Session, report_date: date = None):
             total_energy=total_energy,
             avg_response_time=avg_response_time,
             material_consumption=material_consumption,
+            material_shipped=material_shipped,
+            material_arrived=material_arrived,
             pump_stats=pump_stats,
             generated_at=datetime.utcnow()
         )
@@ -107,18 +119,19 @@ def generate_daily_report(db: Session, report_date: date = None):
     db.commit()
 
 
-def export_report(db: Session, report_date: date = None, district: str = None):
+def export_report(db: Session, start_date: date = None, end_date: date = None, district: str = None):
     query = db.query(DailyReport)
-    if report_date:
-        query = query.filter(DailyReport.report_date == report_date)
+    if start_date:
+        query = query.filter(DailyReport.report_date >= start_date)
+    if end_date:
+        query = query.filter(DailyReport.report_date <= end_date)
     if district:
         query = query.filter(DailyReport.district == district)
+    return query.order_by(DailyReport.report_date.desc(), DailyReport.district).all()
 
-    return query.order_by(DailyReport.report_date.desc()).all()
 
-
-def export_report_to_excel(db: Session, report_date: date = None, district: str = None):
-    reports = export_report(db, report_date, district)
+def export_report_to_excel(db: Session, start_date: date = None, end_date: date = None, district: str = None):
+    reports = export_report(db, start_date, end_date, district)
     if not reports:
         return None
 
@@ -130,11 +143,16 @@ def export_report_to_excel(db: Session, report_date: date = None, district: str 
     wb = Workbook()
     ws = wb.active
     ws.title = "排涝运行报告"
-    headers = ["日期", "区域", "总排水量(m³)", "总能耗(kWh)", "平均响应时间(分钟)", "物资消耗", "泵站统计"]
+    headers = [
+        "日期", "区域", "总排水量(m³)", "总能耗(kWh)", "平均响应时间(分钟)",
+        "物资消耗", "物资出库", "物资到达", "泵站统计"
+    ]
     ws.append(headers)
 
     for r in reports:
-        mat_str = "; ".join(f"{k}:{v}" for k, v in (r.material_consumption or {}).items())
+        mat_consumed = "; ".join(f"{k}:{v}" for k, v in (r.material_consumption or {}).items())
+        mat_shipped = "; ".join(f"{k}:{v}" for k, v in (r.material_shipped or {}).items())
+        mat_arrived = "; ".join(f"{k}:{v}" for k, v in (r.material_arrived or {}).items())
         pump_str = "; ".join(
             f"{p.get('station_name', '')}排水{p.get('discharge_volume', 0)}m³"
             for p in (r.pump_stats or [])
@@ -145,7 +163,9 @@ def export_report_to_excel(db: Session, report_date: date = None, district: str 
             r.total_discharge,
             r.total_energy,
             r.avg_response_time,
-            mat_str,
+            mat_consumed,
+            mat_shipped,
+            mat_arrived,
             pump_str
         ])
 

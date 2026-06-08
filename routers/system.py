@@ -3,10 +3,10 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from database import get_db
-from models import HiddenDanger, WaterloggingEvent, ReplenishmentRequest
+from models import HiddenDanger, WaterloggingEvent, ReplenishmentRequest, ApprovalReminder
 from schemas import (
     HiddenDangerResponse, WaterloggingEventCreate, WaterloggingEventResponse,
-    ReplenishmentRequestResponse, DailyReportResponse
+    ReplenishmentRequestResponse, ApprovalReminderResponse, DailyReportResponse
 )
 from services.risk_service import record_waterlogging_event
 from services.replenishment_service import check_approval_timeouts
@@ -61,6 +61,19 @@ def check_timeouts(db: Session = Depends(get_db)):
     return {"message": "审批超时检查完成"}
 
 
+@router.get("/approval-reminders", response_model=list[ApprovalReminderResponse])
+def list_approval_reminders(request_id: int = None, level: str = None,
+                            escalated: bool = None, db: Session = Depends(get_db)):
+    query = db.query(ApprovalReminder)
+    if request_id:
+        query = query.filter(ApprovalReminder.request_id == request_id)
+    if level:
+        query = query.filter(ApprovalReminder.level == level)
+    if escalated is not None:
+        query = query.filter(ApprovalReminder.escalated == escalated)
+    return query.order_by(ApprovalReminder.created_at.desc()).all()
+
+
 @router.post("/generate-daily-report")
 def generate_report(report_date: date = None, db: Session = Depends(get_db)):
     generate_daily_report(db, report_date)
@@ -68,18 +81,20 @@ def generate_report(report_date: date = None, db: Session = Depends(get_db)):
 
 
 @router.get("/daily-reports", response_model=list[DailyReportResponse])
-def get_reports(report_date: date = None, district: str = None,
-                db: Session = Depends(get_db)):
-    return export_report(db, report_date, district)
+def get_reports(start_date: date = None, end_date: date = None,
+                district: str = None, db: Session = Depends(get_db)):
+    return export_report(db, start_date, end_date, district)
 
 
 @router.get("/daily-reports/export")
-def export_report_excel(report_date: date = None, district: str = None,
-                        db: Session = Depends(get_db)):
-    output = export_report_to_excel(db, report_date, district)
+def export_report_excel(start_date: date = None, end_date: date = None,
+                        district: str = None, db: Session = Depends(get_db)):
+    output = export_report_to_excel(db, start_date, end_date, district)
     if not output:
         return {"message": "无数据可导出"}
-    filename = f"flood_report_{report_date or 'all'}.xlsx"
+    date_range = f"{start_date or 'start'}_to_{end_date or 'end'}"
+    district_suffix = f"_{district}" if district else "_all_districts"
+    filename = f"flood_report_{date_range}{district_suffix}.xlsx"
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -3,14 +3,18 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import (
     Warehouse, MaterialInventory, ResourceAllocationPlan,
-    ResourceAllocation, MaterialType, ApprovalStatus
+    ResourceAllocation, MaterialType, ApprovalStatus, AllocationStatus
 )
 from schemas import (
     WarehouseCreate, WarehouseResponse,
     MaterialInventoryCreate, MaterialInventoryResponse,
-    ResourceAllocationPlanResponse, ResourceAllocationResponse
+    ResourceAllocationPlanResponse, ResourceAllocationResponse,
+    ShipmentConfirmRequest, ArrivalConfirmRequest, ConsumptionReportRequest
 )
-from services.dispatch_service import approve_resource_plan, reject_resource_plan
+from services.dispatch_service import (
+    approve_resource_plan, reject_resource_plan,
+    confirm_shipment, confirm_arrival, report_consumption
+)
 from services.replenishment_service import (
     check_inventory_levels, approve_district_level, approve_city_level
 )
@@ -57,7 +61,6 @@ def list_inventories(warehouse_id: int = None, material_type: MaterialType = Non
 
 @router.get("/inventories/below-safety", response_model=list[MaterialInventoryResponse])
 def get_inventories_below_safety(db: Session = Depends(get_db)):
-    from sqlalchemy import or_
     results = []
     inventories = db.query(MaterialInventory).all()
     for inv in inventories:
@@ -84,6 +87,11 @@ def list_allocation_plans(warning_id: int = None, approval_status: ApprovalStatu
     return query.order_by(ResourceAllocationPlan.created_at.desc()).all()
 
 
+@router.get("/allocation-plans/{plan_id}", response_model=ResourceAllocationPlanResponse)
+def get_allocation_plan(plan_id: int, db: Session = Depends(get_db)):
+    return db.query(ResourceAllocationPlan).filter(ResourceAllocationPlan.id == plan_id).first()
+
+
 @router.put("/allocation-plans/{plan_id}/approve", response_model=ResourceAllocationPlanResponse)
 def approve_plan(plan_id: int, approver: str, db: Session = Depends(get_db)):
     return approve_resource_plan(db, plan_id, approver)
@@ -95,11 +103,31 @@ def reject_plan(plan_id: int, approver: str, db: Session = Depends(get_db)):
 
 
 @router.get("/allocations", response_model=list[ResourceAllocationResponse])
-def list_allocations(plan_id: int = None, db: Session = Depends(get_db)):
+def list_allocations(plan_id: int = None, status: AllocationStatus = None,
+                     is_cross_district: bool = None, db: Session = Depends(get_db)):
     query = db.query(ResourceAllocation)
     if plan_id:
         query = query.filter(ResourceAllocation.plan_id == plan_id)
+    if status:
+        query = query.filter(ResourceAllocation.status == status)
+    if is_cross_district is not None:
+        query = query.filter(ResourceAllocation.is_cross_district == is_cross_district)
     return query.all()
+
+
+@router.put("/allocations/{allocation_id}/ship", response_model=ResourceAllocationResponse)
+def ship_allocation(allocation_id: int, db: Session = Depends(get_db)):
+    return confirm_shipment(db, allocation_id)
+
+
+@router.put("/allocations/{allocation_id}/arrive", response_model=ResourceAllocationResponse)
+def arrive_allocation(allocation_id: int, receiver: str, db: Session = Depends(get_db)):
+    return confirm_arrival(db, allocation_id, receiver)
+
+
+@router.put("/allocations/{allocation_id}/consume", response_model=ResourceAllocationResponse)
+def consume_allocation(allocation_id: int, consumed_quantity: int, db: Session = Depends(get_db)):
+    return report_consumption(db, allocation_id, consumed_quantity)
 
 
 @router.put("/replenishment/{request_id}/approve-district", response_model=dict)

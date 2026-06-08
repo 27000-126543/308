@@ -58,6 +58,13 @@ class TrafficControlType(str, enum.Enum):
     TRAFFIC_DIVERSION = "traffic_diversion"
 
 
+class AllocationStatus(str, enum.Enum):
+    LOCKED = "locked"
+    SHIPPED = "shipped"
+    ARRIVED = "arrived"
+    CONSUMED = "consumed"
+
+
 class RainStation(Base):
     __tablename__ = "rain_stations"
     id = Column(Integer, primary_key=True, index=True)
@@ -229,6 +236,7 @@ class ResourceAllocationPlan(Base):
     warning_id = Column(Integer, ForeignKey("warnings.id"), nullable=False)
     district = Column(String(50), nullable=False)
     plan_data = Column(JSON, nullable=False)
+    cross_district_summary = Column(JSON, default=dict)
     approval_status = Column(Enum(ApprovalStatus), default=ApprovalStatus.PENDING)
     approver = Column(String(100), nullable=True)
     approved_at = Column(DateTime, nullable=True)
@@ -245,7 +253,13 @@ class ResourceAllocation(Base):
     material_type = Column(Enum(MaterialType), nullable=False)
     quantity = Column(Integer, nullable=False)
     distance_km = Column(Float, default=0)
-    locked = Column(Boolean, default=False)
+    is_cross_district = Column(Boolean, default=False)
+    status = Column(Enum(AllocationStatus), default=AllocationStatus.LOCKED)
+    shipped_at = Column(DateTime, nullable=True)
+    arrived_at = Column(DateTime, nullable=True)
+    receiver = Column(String(100), nullable=True)
+    consumed_quantity = Column(Integer, default=0)
+    estimated_arrival_hours = Column(Float, default=0)
     plan = relationship("ResourceAllocationPlan", back_populates="allocations")
 
 
@@ -384,6 +398,7 @@ class ApprovalReminder(Base):
     level = Column(String(20), nullable=False)
     reminder_count = Column(Integer, default=0)
     escalated = Column(Boolean, default=False)
+    content = Column(Text, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -396,6 +411,8 @@ class DailyReport(Base):
     total_energy = Column(Float, default=0)
     avg_response_time = Column(Float, default=0)
     material_consumption = Column(JSON, default=dict)
+    material_shipped = Column(JSON, default=dict)
+    material_arrived = Column(JSON, default=dict)
     pump_stats = Column(JSON, default=dict)
     generated_at = Column(DateTime, default=datetime.utcnow)
 
